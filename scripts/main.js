@@ -5,6 +5,10 @@
 // garantie de ne pas polluer l'espace de noms de notre environnement javascript par  l'encapsulation de tout notre script dans l'exécution d'une fonction anonyme
 (function () {
 
+    // Secteurs disciplinaires de droit retenus (GET /secteurs-disciplinaires) :
+  // 36 Sciences juridiques, 37 Sciences politiques, 61 Pluridisciplinaire droit, sciences politiques
+  const SECTEURS_RETENUS = [36, 37, 61];
+
   function creerMoyennesSalairesParAnneeRegionDiscipline() {
     const {storage} = window.MAINAPP;
     // On part d'une liste de stats avec plusieurs salaires médian pour chaque annee, region, disciplineS
@@ -105,42 +109,54 @@
       console.warn('No region found for name ' + regionNom);
     }
   }
-
+  /**
+   * Charge les formations des secteurs de droit, puis ne garde dans le storage
+   * que les établissements qui proposent au moins une de ces formations.
+   */
+  function chargerFormationsEtEtablissementsDroit() {
+    const { network, storage } = window.MAINAPP;
+    // Un GET /formations par secteur, en parallèle
+    return Promise.all(SECTEURS_RETENUS.map((secDiscId) => network.loadFormations(secDiscId)))
+      .then((formationsParSecteur) => {
+        // 1. un seul tableau avec toutes les formations de droit
+        const formationsDroit = formationsParSecteur.flat();
+        storage.set('formationsDroit', formationsDroit);
+        // 2. uai des établissements ayant au moins une formation de droit (Set = sans doublon)
+        const uaiDroit = new Set(formationsDroit.map((f) => f.etabUai));
+        // 3. on ne garde que ces établissements
+        const tous = storage.get('etablissementsByUai');
+        const etablissementsDroit = Object.fromEntries(
+          Object.entries(tous).filter(([uai]) => uaiDroit.has(uai))
+        );
+        storage.set('etablissementsByUai', etablissementsDroit);
+      });
+  }
   /**
    * Fonction "point d'entrée de l'application", la première qui sera exécutée
    */
   function main() {
-    // Vérifie que la structure window.MAINAPP est présente
     if (!window.MAINAPP) {
       throw new Error('window.MAINAPP non disponible');
     }
-    // pour simplifier l'écriture après
-    const {viz, network, storage} = window.MAINAPP;
-    // Créer les structures de visualisations initiales (en indicant l'indicateur de chargement
-    viz.createSalaireHeatmap(onSelectDisciplineByNom, onSelectRegionByNom);
-    viz.createSalaireLines(false);
-    // Charge les données des entités et les statistiques initiales et les stocke dans le modèles
-    // On ne s'interesse pour cette démo qu'aux regionsById et aux disciplinesById
-    const promesseEntites = network.loadEntities().then(({
-      regionsById,
-      disicplinesById
-    }) => {
-      storage.set('regionsById', regionsById);
-      storage.set('disicplinesById', disicplinesById);
-    });
-    const promesseStats = network.requestStats({
-      moisApresDiplome: 30 // on ne veut que les stats d'insertion pro à 30 mois après le diplome
-    }, {
-      typeStats: 'insertionsPro', // on ne s'interesse qu'aux salaire
-      insertionProDetails: 'salaire' // on ne s'interesse qu'aux salaire
-    }).then((stats) => {
-      storage.set('stats', stats);
-    });
-    // On attend que les deux promesses aient réussie et le cas échéant, on prepare notre jeu de donnée intermédiaire et l'on met à jour la visualisations heatmap
-    Promise.all([promesseEntites, promesseStats]).then(() => {
-      creerMoyennesSalairesParAnneeRegionDiscipline();
-      updateVisualisations({ updateSalaireHeatmap: true })
-    });
+    const { network, storage } = window.MAINAPP;
+
+    // Charge les entités et les stocke dans le modèle
+    network.loadEntities()
+      .then(({ academiesById, regionsById, secteursDiscById, disicplinesById, etablissementsByUai }) => {
+        storage.set('academiesById', academiesById);
+        storage.set('regionsById', regionsById);
+        storage.set('secteursDiscById', secteursDiscById);
+        storage.set('disicplinesById', disicplinesById);
+        storage.set('etablissementsByUai', etablissementsByUai);
+        // Les établissements doivent être en mémoire avant de les filtrer
+        return chargerFormationsEtEtablissementsDroit();
+      })
+      .then(() => {
+        console.log('Formations de droit :', storage.get('formationsDroit').length);
+        console.log('Établissements de droit :', Object.keys(storage.get('etablissementsByUai')).length);
+        // TODO étapes suivantes : mentions, statistiques, affichage
+      })
+      .catch((erreur) => console.error(erreur));
   }
 
   /*

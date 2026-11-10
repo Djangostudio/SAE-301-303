@@ -79,6 +79,27 @@
       });
   }
 
+  /**
+   * Récupère la liste des établissements, construit et retourne un dictionnaire d'établissements par uai
+   * @returns Promesse du dictionnaire d'établissements par uai
+   */
+  function loadEtablissements() {
+    return fetch(`${BASE_API_URL}/etablissements`)
+      .then((reponse) => {
+        if (!reponse.ok) {
+          throw new Error(`Erreur serveur lors du chargement des établissements (code ${reponse.status}).`);
+        }
+        return reponse.json();
+      })
+      .then((etablissements) => {
+        // Créer un dictionnaire (objet) d'établissements par uai
+        const etablissementsByUai = Object.fromEntries(etablissements.map((etab) => [etab.uai, etab]));
+        return {
+          etablissementsByUai
+        };
+      });
+  }
+
   /*
    Fonctions et données "publiques" : exporté pas dans MAINAPP.data
    */
@@ -88,15 +109,29 @@
    * @returns promesse de chargements des dictionnaires
    */
   window.MAINAPP.network.loadEntities = function () {
-    // Charge les academie et les secteurs disciplinaires
-    // puis retourne les différents dictionnaires dans un objet unique
-    return Promise.all([loadAcademies(), loadSecteurDisciplinaires()])
-      .then(([{academiesById, regionsById}, { secteursDiscById, disicplinesById }]) => ({
+    return Promise.all([loadAcademies(), loadSecteurDisciplinaires(), loadEtablissements()])
+      .then(([{ academiesById, regionsById }, { secteursDiscById, disicplinesById }, { etablissementsByUai }]) => ({
         academiesById,
         regionsById,
         secteursDiscById,
-        disicplinesById
+        disicplinesById,
+        etablissementsByUai
       }));
+  }
+
+    /**
+   * Récupère les formations d'un secteur disciplinaire, avec les détails (établissement, académie...)
+   * @param {number} secDiscId id du secteur disciplinaire
+   * @returns Promesse du tableau de formations
+   */
+  window.MAINAPP.network.loadFormations = function (secDiscId) {
+    return fetch(`${BASE_API_URL}/formations?sdid=${secDiscId}&full-details=1`)
+      .then((reponse) => {
+        if (!reponse.ok) {
+          throw new Error(`Erreur serveur lors du chargement des formations (code ${reponse.status}).`);
+        }
+        return reponse.json();
+      });
   }
 
   window.MAINAPP.network.requestStats = function (filtres = null, collecte = null) {
@@ -127,3 +162,4 @@ Mention	GET /mentions (à ajouter)
 Formation	GET /formations?sdid=…&full-details=1 (à ajouter)
 Candidater, InsererPro	POST /stats/search (sa fonction requestStats, inchangée)
 */
+
