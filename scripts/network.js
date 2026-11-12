@@ -163,7 +163,7 @@
 
   window.MAINAPP.network.requestStats = function (filtres = null, collecte = null) {
     // Création de la requête
-    requete = {};
+    const requete = {};
     if (filtres) {
       requete.filters = filtres;
     }
@@ -183,10 +183,4 @@
     });
   }
 }());
-
-/* ajouter Etablissement	GET /etablissements (à ajouter)
-Mention	GET /mentions (à ajouter)
-Formation	GET /formations?sdid=…&full-details=1 (à ajouter)
-Candidater, InsererPro	POST /stats/search (sa fonction requestStats, inchangée)
-*/
 

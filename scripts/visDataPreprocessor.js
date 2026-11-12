@@ -190,6 +190,193 @@
       }
     }
   }
+
+  // Fonctions de notre application : masters de droit
+
+  /**
+   * Fonction privée : calcule un pourcentage arrondi, ou null si le total est 0 ou absent
+   */
+  function pourcentage(partie, total) {
+    if (!total || partie === null || partie === undefined) {
+      return null;
+    }
+    return Math.round((partie / total) * 100);
+  }
+
+  /**
+   * Fonction privée : lit le taux d'emploi stable (en %) d'une statistique d'insertion pro.
+   * L'API ne fournit pas de "taux d'insertion" : emplois.stable est déjà un pourcentage
+   * (part des répondants en emploi stable), on le prend tel quel.
+   */
+  function lireTauxEmploiStable(stat) {
+    if (!stat.emplois || stat.emplois.stable === null || stat.emplois.stable === undefined) {
+      return null;
+    }
+    return stat.emplois.stable;
+  }
+
+  /**
+   * Liste des sessions (années de collecte) présentes dans les candidatures, de la plus récente à la plus ancienne
+   * @param {Array} candidatures tableau stats.candidatures
+   * @returns tableau d'années, ex. [2023, 2022, 2021]
+   */
+  window.MAINAPP.vizDataPreprocessor.listerSessions = function (candidatures) {
+    return Array.from(new Set(candidatures.map(({ identifiants }) => identifiants.anneeCollecte)))
+      .sort((a1, a2) => a2 - a1);
+  }
+
+  /**
+   * Pour chaque établissement, garde la statistique d'insertion la plus récente
+   * (et, à année égale, celle qui a le plus de réponses, donc la plus fiable).
+   * @param {Array} insertionsPro tableau stats.insertionsPro
+   * @returns dictionnaire uai -> {annee, nbReponses, tauxEmploiStable, echantillonFragile}
+   */
+  window.MAINAPP.vizDataPreprocessor.insertionParEtablissement = function (insertionsPro) {
+    return insertionsPro.reduce((dico, stat) => {
+      const uai = stat.identifiants.etabUai;
+      const annee = stat.identifiants.anneeCollecte;
+      const nbReponses = stat.general ? stat.general.nbResponses || 0 : 0;
+      const entree = dico[uai];
+      const plusRecente = !entree || annee > entree.annee;
+      const memeAnneeMaisPlusDeReponses = entree && annee === entree.annee && nbReponses > entree.nbReponses;
+      if (plusRecente || memeAnneeMaisPlusDeReponses) {
+        dico[uai] = {
+          annee,
+          nbReponses,
+          tauxEmploiStable: lireTauxEmploiStable(stat),
+          echantillonFragile: stat.general ? Boolean(stat.general.pbEchantillon) : false,
+        };
+      }
+      return dico;
+    }, {});
+  }
+
+  /**
+   * Construit la liste des formations de droit avec tous leurs indicateurs pour une session donnée.
+   * @param {Array} formations formationsDroit
+   * @param {Object} stats {candidatures, insertionsPro}
+   * @param {Object} etablissementsByUai dictionnaire des établissements
+   * @param {Object} academiesById dictionnaire des académies
+   * @param {Object} mentionsById dictionnaire des mentions
+   * @param {number} session année de collecte choisie
+   * @returns tableau de formations enrichies
+   */
+  window.MAINAPP.vizDataPreprocessor.calculerIndicateursFormations = function (formations, stats, etablissementsByUai, academiesById, mentionsById, session) {
+    // 1. dictionnaire ifc -> stat de candidature, uniquement pour la session choisie
+    const candidatureParIfc = Object.fromEntries(stats.candidatures
+      .filter(({ identifiants }) => identifiants.anneeCollecte === session)
+      .map((stat) => [stat.identifiants.formationIfc, stat]));
+
+    // 2. dictionnaire uai -> insertion la plus récente
+    const insertionParUai = window.MAINAPP.vizDataPreprocessor.insertionParEtablissement(stats.insertionsPro);
+
+    // 3. une formation enrichie par formation de droit
+    return formations.map((formation) => {
+      const etab = etablissementsByUai[formation.etabUai];
+      const academie = etab ? academiesById[etab.academieId] : null;
+      const mention = mentionsById[formation.mentionId];
+      const candidature = candidatureParIfc[formation.ifc];
+      const g = candidature ? candidature.general : null; // nombres de la formation (ou null si pas de stat)
+      const insertion = insertionParUai[formation.etabUai] || null;
+
+      return {
+        // Formation, Etablissement, Academie, Mention
+        idFormation: formation.ifc,
+        parcours: formation.parcours,
+        mentionId: formation.mentionId,
+        mentionNom: mention ? mention.nom : '',
+        alternance: formation.alternance,
+        ville: formation.ville,
+        etabUai: formation.etabUai,
+        etabNom: etab ? etab.nom : formation.etabUai,
+        academieId: etab ? etab.academieId : null,
+        academieNom: academie ? academie.nom : '',
+        // Candidater (nombres de l'API + taux calculés)
+        capacite: g ? g.capacite : null,
+        nbCandidats: g ? g.nb : null,
+        nbAdmis: g ? g.accept : null,
+        nbPropositions: g ? g.prop : null,
+        rangDernierAppele: g ? g.rangDernier : null,
+        tauxAcces: g ? pourcentage(g.prop, g.nb) : null,
+        pctAdmisFemmes: g ? pourcentage(g.acceptFemmes, g.accept) : null,
+        // InsererPro (niveau établissement)
+        tauxEmploiStable: insertion ? insertion.tauxEmploiStable : null,
+        nbReponses: insertion ? insertion.nbReponses : null,
+        echantillonFragile: insertion ? insertion.echantillonFragile : false,
+      };
+    });
+  }
+
+  /**
+   * Filtre les formations selon les choix de l'utilisateur.
+   * Un filtre à null (ou false pour l'alternance) veut dire "pas de filtre".
+   * @param {Array} formations formations avec indicateurs
+   * @param {Object} filtres {mentionId, academieId, alternanceSeulement}
+   * @returns tableau de formations filtrées
+   */
+  window.MAINAPP.vizDataPreprocessor.filtrerFormations = function (formations, filtres) {
+    const { mentionId = null, academieId = null, alternanceSeulement = false } = filtres;
+    return formations
+      .filter((f) => mentionId === null || f.mentionId === mentionId)
+      .filter((f) => academieId === null || f.academieId === academieId)
+      .filter((f) => !alternanceSeulement || f.alternance);
+  }
+
+  /**
+   * Trie les formations par ordre décroissant selon le critère choisi.
+   * Les valeurs inconnues (null) sont toujours placées en fin de liste.
+   * @param {Array} formations formations à trier
+   * @param {string} tri 'acces' | 'emploiStable' | 'places'
+   * @returns nouveau tableau trié
+   */
+  window.MAINAPP.vizDataPreprocessor.trierFormations = function (formations, tri) {
+    const champParTri = { acces: 'tauxAcces', emploiStable: 'tauxEmploiStable', places: 'capacite' };
+    const champ = champParTri[tri] || 'tauxAcces';
+    return [...formations].sort((f1, f2) => {
+      if (f1[champ] === null && f2[champ] === null) return 0;
+      if (f1[champ] === null) return 1;  // f1 après f2
+      if (f2[champ] === null) return -1; // f1 avant f2
+      return f2[champ] - f1[champ];      // décroissant
+    });
+  }
+
+  /**
+   * Calcule les indicateurs clés de la sélection affichée.
+   * @param {Array} formations formations affichées
+   * @returns {nbFormations, capacite, nbCandidats, nbAdmis, tauxAccesGlobal, tauxEmploiStableMoyen}
+   */
+  window.MAINAPP.vizDataPreprocessor.calculerIndicateursCles = function (formations) {
+    // somme d'un champ, en ignorant les valeurs inconnues
+    const somme = (champ) => formations.reduce((total, f) => total + (f[champ] || 0), 0);
+
+    // taux d'accès global : total des propositions / total des candidats,
+    // uniquement sur les formations qui ont les deux nombres
+    const avecStats = formations.filter((f) => f.nbCandidats && f.nbPropositions !== null);
+    const totalCandidats = avecStats.reduce((t, f) => t + f.nbCandidats, 0);
+    const totalPropositions = avecStats.reduce((t, f) => t + f.nbPropositions, 0);
+
+    // emploi stable : un établissement ne compte qu'une fois
+    // (ses formations ont toutes la même valeur, puisque l'API la donne par établissement)
+    const emploiParEtab = {};
+    formations.forEach((f) => {
+      if (f.tauxEmploiStable !== null) {
+        emploiParEtab[f.etabUai] = f.tauxEmploiStable;
+      }
+    });
+    const valeursEmploi = Object.values(emploiParEtab);
+
+    return {
+      nbFormations: formations.length,
+      capacite: somme('capacite'),
+      nbCandidats: somme('nbCandidats'),
+      nbAdmis: somme('nbAdmis'),
+      tauxAccesGlobal: totalCandidats ? Math.round((totalPropositions / totalCandidats) * 100) : null,
+      tauxEmploiStableMoyen: valeursEmploi.length
+        ? Math.round(valeursEmploi.reduce((t, v) => t + v, 0) / valeursEmploi.length)
+        : null,
+    };
+  }
+
 }());
 
 //remplacer par nos fonctions avec nos infos, ça va aussi nous aider pour tout ce qui est filtrage et tri

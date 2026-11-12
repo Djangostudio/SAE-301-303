@@ -8,6 +8,10 @@
     // Secteurs disciplinaires de droit retenus (GET /secteurs-disciplinaires) :
   // 36 Sciences juridiques, 37 Sciences politiques, 61 Pluridisciplinaire droit, sciences politiques
   const SECTEURS_RETENUS = [36, 37, 61];
+  // Discipline "Droit, sciences politiques" (disciplineId des secteurs 36, 37, 61)
+  const DISCIPLINE_DROIT = 1;
+  // Disciplines d'insertion pro. de ces secteurs (champ insDiscId) : 36 -> disc02, 37 et 61 -> disc01
+  const INS_DISC_RETENUES = ['disc01', 'disc02'];
 
   function creerMoyennesSalairesParAnneeRegionDiscipline() {
     const {storage} = window.MAINAPP;
@@ -145,6 +149,62 @@
   }
 
   /**
+   * Charge les statistiques de droit en deux requêtes :
+   *  - candidatures : filtre par secteur disciplinaire (fonctionne correctement)
+   *  - insertion pro : filtre par discipline, car l'API se trompe sur les secteurs pour l'insertion,
+   *    puis on ne garde que les disciplines d'insertion du droit
+   * On range le résultat sous la même forme qu'avant : {candidatures, insertionsPro}
+   */
+  function chargerStatsDroit() {
+    const { network, storage } = window.MAINAPP;
+
+    const promesseCandidatures = network.requestStats(
+      { secteurDisciplinaireIds: SECTEURS_RETENUS },
+      { typeStats: 'candidatures', candidatureDetails: 'general' }
+    );
+
+    const promesseInsertions = network.requestStats(
+      { disciplineIds: DISCIPLINE_DROIT, moisApresDiplome: 30 },
+      { typeStats: 'insertionsPro', insertionProDetails: ['general', 'emplois'] }
+    );
+
+    return Promise.all([promesseCandidatures, promesseInsertions])
+      .then(([statsCandidatures, statsInsertions]) => {
+        const insertionsDroit = statsInsertions.insertionsPro
+          .filter((stat) => INS_DISC_RETENUES.includes(stat.identifiants.insDiscId));
+        storage.set('stats', {
+          candidatures: statsCandidatures.candidatures,
+          insertionsPro: insertionsDroit,
+        });
+      });
+  }
+
+  /**
+   * Recalcule les formations affichées et les indicateurs clés à partir des filtres du storage.
+   * À appeler au démarrage, puis à chaque fois que l'utilisateur change un filtre.
+   */
+  function mettreAJourDonnees() {
+    const { storage, vizDataPreprocessor: pre } = window.MAINAPP;
+    const filtres = storage.get('filtres');
+
+    // 1. indicateurs de toutes les formations de droit pour la session choisie
+    const formations = pre.calculerIndicateursFormations(
+      storage.get('formationsDroit'),
+      storage.get('stats'),
+      storage.get('etablissementsByUai'),
+      storage.get('academiesById'),
+      storage.get('mentionsById'),
+      filtres.session);
+
+    // 2. filtres, puis tri
+    const formationsAffichees = pre.trierFormations(pre.filtrerFormations(formations, filtres), filtres.tri);
+
+    // 3. on range le résultat dans le modèle
+    storage.set('formationsAffichees', formationsAffichees);
+    storage.set('indicateursCles', pre.calculerIndicateursCles(formationsAffichees));
+  }
+
+  /**
    * Fonction "point d'entrée de l'application", la première qui sera exécutée
    */
   function main() {
@@ -153,21 +213,47 @@
     }
     const { network, storage } = window.MAINAPP;
 
-    // Charge les entités et les stocke dans le modèle
-    network.loadEntities()
-      .then(({ academiesById, regionsById, secteursDiscById, disicplinesById, etablissementsByUai }) => {
+    // Promesse 1 : entités, puis formations et établissements de droit, puis mentions de droit
+    const promesseEntites = network.loadEntities()
+      .then(({ academiesById, regionsById, secteursDiscById, disicplinesById, etablissementsByUai, mentionsById }) => {
         storage.set('academiesById', academiesById);
         storage.set('regionsById', regionsById);
         storage.set('secteursDiscById', secteursDiscById);
         storage.set('disicplinesById', disicplinesById);
         storage.set('etablissementsByUai', etablissementsByUai);
-        // Les établissements doivent être en mémoire avant de les filtrer
+        storage.set('mentionsById', mentionsById);
+        filtrerMentionsDroit();
+        // les établissements doivent être en mémoire avant de les filtrer
         return chargerFormationsEtEtablissementsDroit();
-      })
+      });
+
+    // Promesse 2 : statistiques (ne dépend pas des entités, donc lancée en même temps)
+    const promesseStats = chargerStatsDroit();
+
+    // On attend les deux avant de continuer
+    Promise.all([promesseEntites, promesseStats])
       .then(() => {
-        console.log('Formations de droit :', storage.get('formationsDroit').length);
-        console.log('Établissements de droit :', Object.keys(storage.get('etablissementsByUai')).length);
-        // TODO étapes suivantes : mentions, statistiques, affichage
+        const pre = window.MAINAPP.vizDataPreprocessor;
+
+        // sessions disponibles (la plus récente en premier)
+        const sessions = pre.listerSessions(storage.get('stats').candidatures);
+        storage.set('sessions', sessions);
+
+        // filtres par défaut : session la plus récente, pas d'autre filtre, tri par taux d'accès
+        storage.set('filtres', {
+          session: sessions[0],
+          mentionId: null,
+          academieId: null,
+          alternanceSeulement: false,
+          tri: 'acces',
+        });
+
+        mettreAJourDonnees();
+
+        console.log('Sessions :', sessions);
+        console.log('Indicateurs clés :', storage.get('indicateursCles'));
+        console.table(storage.get('formationsAffichees').slice(0, 10));
+        // TODO : affichage
       })
       .catch((erreur) => console.error(erreur));
   }
