@@ -100,6 +100,27 @@
       });
   }
 
+    /**
+   * Récupère la liste des mentions, construit et retourne un dictionnaire de mentions par id
+   * @returns Promesse du dictionnaire de mentions par id
+   */
+  function loadMentions() {
+    return fetch(`${BASE_API_URL}/mentions`)
+      .then((reponse) => {
+        if (!reponse.ok) {
+          throw new Error(`Erreur serveur lors du chargement des mentions (code ${reponse.status}).`);
+        }
+        return reponse.json();
+      })
+      .then((mentions) => {
+        // Créer un dictionnaire (objet) de mentions par id
+        const mentionsById = Object.fromEntries(mentions.map((mention) => [mention.id, mention]));
+        return {
+          mentionsById
+        };
+      });
+  }
+
   /*
    Fonctions et données "publiques" : exporté pas dans MAINAPP.data
    */
@@ -109,13 +130,19 @@
    * @returns promesse de chargements des dictionnaires
    */
   window.MAINAPP.network.loadEntities = function () {
-    return Promise.all([loadAcademies(), loadSecteurDisciplinaires(), loadEtablissements()])
-      .then(([{ academiesById, regionsById }, { secteursDiscById, disicplinesById }, { etablissementsByUai }]) => ({
+    return Promise.all([loadAcademies(), loadSecteurDisciplinaires(), loadEtablissements(), loadMentions()])
+      .then(([
+        { academiesById, regionsById },
+        { secteursDiscById, disicplinesById },
+        { etablissementsByUai },
+        { mentionsById }
+      ]) => ({
         academiesById,
         regionsById,
         secteursDiscById,
         disicplinesById,
-        etablissementsByUai
+        etablissementsByUai,
+        mentionsById
       }));
   }
 

@@ -131,6 +131,19 @@
         storage.set('etablissementsByUai', etablissementsDroit);
       });
   }
+
+    /**
+   * Ne garde que les mentions dont le secteur disciplinaire fait partie des secteurs de droit retenus.
+   * Les mentions sont triées par ordre alphabétique pour l'affichage.
+   */
+  function filtrerMentionsDroit() {
+    const { storage } = window.MAINAPP;
+    const mentionsDroit = Object.values(storage.get('mentionsById'))
+      .filter((mention) => SECTEURS_RETENUS.includes(mention.secDiscId))
+      .sort((m1, m2) => m1.nom.localeCompare(m2.nom));
+    storage.set('mentionsDroit', mentionsDroit);
+  }
+
   /**
    * Fonction "point d'entrée de l'application", la première qui sera exécutée
    */
@@ -158,6 +171,8 @@
       })
       .catch((erreur) => console.error(erreur));
   }
+
+  
 
   /*
   On doit exécuter main uniquement lorsque le DOM (page web) est "prête", pour que tous les autres scripts soient chargée (et donc toutes les fonctions de window.MAINAPP soient disponibles).
